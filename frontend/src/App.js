@@ -1,39 +1,47 @@
 // frontend/src/App.js
+// Главный компонент приложения "Опрос по Ведьмаку"
+// Реализует: просмотр опросов (гость), вход/регистрация, однократное голосование, отображение статистики
+
 import React, { useState, useEffect } from 'react';
-import 'bootstrap/dist/css/bootstrap.min.css';
-import './App.css';
+import 'bootstrap/dist/css/bootstrap.min.css'; // Подключаем стили Bootstrap
+import './App.css'; // Подключаем кастомные стили (тема Ведьмака)
 
 function App() {
   // Состояния
-  const [auth, setAuth] = useState(null); // { token, username }
-  const [polls, setPolls] = useState([]);
-  const [selections, setSelections] = useState({}); // { questionId: choiceId }
-  const [hasVoted, setHasVoted] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
-  const [authTab, setAuthTab] = useState('login');
+  const [auth, setAuth] = useState(null); // { token, username } — данные авторизованного пользователя
+  const [polls, setPolls] = useState([]); // Список опросов, загруженных с бэкенда
+  const [selections, setSelections] = useState({}); // Текущий выбор пользователя: { questionId: choiceId }
+  const [hasVoted, setHasVoted] = useState(false); // Флаг: проголосовал ли пользователь
+  const [showAuthModal, setShowAuthModal] = useState(false); // Показывать/скрыть модальное окно входа
+  const [authTab, setAuthTab] = useState('login'); // Активная вкладка в модальном окне: 'login' или 'register'
 
-  // Загрузка при старте
+  // Загрузка данных при первом рендере компонента
   useEffect(() => {
     const saved = localStorage.getItem('auth');
     if (saved) {
+      // Восстанавливаем сессию из localStorage (если пользователь уже входил)
       const data = JSON.parse(saved);
       setAuth(data);
       loadPolls(data.token);
     } else {
-      loadPolls(null); // Гость
+      // Гость: загружаем опросы без токена (только вопросы и варианты)
+      loadPolls(null);
     }
   }, []);
 
+  // Функция загрузки опросов с бэкенда
   const loadPolls = async (token = null) => {
     try {
+      // Если пользователь авторизован — добавляем заголовок с токеном
       const headers = token ? { Authorization: `Token ${token}` } : {};
       const res = await fetch('http://127.0.0.1:8000/api/polls/', { headers });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
+      // Обработка ответа: API может возвращать как массив, так и объект с пагинацией (results)
       const pollsArray = Array.isArray(data.results) ? data.results : (Array.isArray(data) ? data : []);
       setPolls(pollsArray);
 
-      // Проверяем, голосовал ли пользователь (только если авторизован)
+      // Проверяем, голосовал ли пользователь (по наличию my_votes у вариантов)
       if (token) {
         const userHasVoted = pollsArray.some(poll =>
           poll.questions?.some(q =>
@@ -42,7 +50,7 @@ function App() {
         );
         setHasVoted(userHasVoted);
       } else {
-        setHasVoted(false);
+        setHasVoted(false); // Гость не может голосовать
       }
     } catch (e) {
       console.error('Ошибка загрузки опросов:', e);
@@ -50,6 +58,7 @@ function App() {
     }
   };
 
+  // Обработчик входа
   const handleLogin = async (e) => {
     e.preventDefault();
     const username = e.target.username.value;
@@ -61,6 +70,7 @@ function App() {
     });
     const data = await res.json();
     if (data.token) {
+      // Сохраняем данные авторизации в состоянии и localStorage
       const authData = { token: data.token, username: data.username };
       localStorage.setItem('auth', JSON.stringify(authData));
       setAuth(authData);
@@ -71,6 +81,7 @@ function App() {
     }
   };
 
+  // Обработчик регистрации
   const handleRegister = async (e) => {
     e.preventDefault();
     const username = e.target.username.value;
@@ -92,23 +103,27 @@ function App() {
     }
   };
 
+  // Обработчик выхода
   const handleLogout = () => {
     localStorage.removeItem('auth');
     setAuth(null);
     setHasVoted(false);
     setSelections({});
-    loadPolls(null);
+    loadPolls(null); // Перезагружаем опросы как гость
   };
 
+  // Обработчик выбора варианта ответа
   const handleSelect = (questionId, choiceId) => {
-    // Гость или уже проголосовавший — не может менять выбор
+    // Гость или уже проголосовавший пользователь не может менять выбор
     if (!auth || hasVoted) return;
     setSelections(prev => ({ ...prev, [questionId]: choiceId }));
   };
 
+  // Обработчик отправки голосов (по всем вопросам)
   const handleSubmit = async () => {
     if (!auth) return;
     try {
+      // Отправляем голос по каждому выбранному варианту
       const promises = Object.entries(selections).map(([qId, chId]) =>
         fetch('http://127.0.0.1:8000/api/vote/', {
           method: 'POST',
@@ -121,7 +136,7 @@ function App() {
       );
       await Promise.all(promises);
       setHasVoted(true);
-      loadPolls(auth.token); // Обновляем данные со статистикой
+      loadPolls(auth.token); // Перезагружаем данные: теперь будет статистика и my_votes
       alert('Ваш голос учтён!');
     } catch (err) {
       alert('Ошибка при отправке голосов');
@@ -129,13 +144,14 @@ function App() {
     }
   };
 
+  // Проверка: все ли вопросы отвечены (для активации кнопки "Отправить")
   const allAnswered = polls.length > 0 && polls.every(poll =>
     poll.questions?.every(q => selections[q.id] != null)
   );
 
   return (
     <div className="App">
-      {/* Шапка */}
+      {/* Шапка сайта */}
       <nav className="navbar navbar-dark" style={{ backgroundColor: 'rgba(26,21,35,0.95)' }}>
         <div className="container">
           <h1>The Witcher</h1>
@@ -155,7 +171,7 @@ function App() {
         </div>
       </nav>
 
-      {/* Основной контент */}
+      {/* Основной контент: список опросов */}
       <div className="container mt-4">
         {Array.isArray(polls) && polls.length > 0 ? (
           polls.map(poll => (
@@ -169,7 +185,7 @@ function App() {
                       const isSelected = selections[q.id] === ch.id;
                       const hasMyVote = ch.my_votes && ch.my_votes.length > 0;
 
-                      // Гость НЕ может выбирать
+                      // Гость НЕ может выбирать; также нельзя выбирать после отправки
                       const isClickable = auth && !hasVoted && !hasMyVote;
 
                       return (
@@ -223,6 +239,7 @@ function App() {
                 </div>
               )}
 
+              {/* Сообщение после успешного голосования */}
               {hasVoted && (
                 <div className="alert alert-info mt-3">
                   Спасибо! Ваш голос учтён.
@@ -235,7 +252,7 @@ function App() {
         )}
       </div>
 
-      {/* Модальное окно авторизации */}
+      {/* Модальное окно авторизации (вход/регистрация) */}
       {showAuthModal && (
         <div
           className="modal show d-block"

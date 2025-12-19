@@ -1,35 +1,58 @@
 # backend/api/serializers.py
+# Сериализаторы преобразуют объекты Django (модели) в JSON и обратно.
+# Используются в REST API для отправки данных фронтенду и приёма данных от него.
+
 from rest_framework import serializers
 from polls.models import Poll, Question, Choice, Vote
 
+# Сериализатор для варианта ответа (Choice) с расширенной статистикой.
+# Включает: количество голосов, процент и признак "голосовал ли текущий пользователь".
 class ChoiceWithStatsSerializer(serializers.ModelSerializer):
-    vote_count = serializers.SerializerMethodField()
-    percentage = serializers.SerializerMethodField()
-    my_votes = serializers.SerializerMethodField()
+    # Дополнительные поля, вычисляемые через методы (SerializerMethodField)
+    vote_count = serializers.SerializerMethodField()   # Общее число голосов за этот вариант
+    percentage = serializers.SerializerMethodField()   # Процент голосов по вопросу
+    my_votes = serializers.SerializerMethodField()     # Список ID голосов текущего пользователя
 
     class Meta:
         model = Choice
+        # Поля, которые будут включены в JSON-ответ
         fields = ['id', 'text', 'vote_count', 'percentage', 'my_votes']
 
+    # Метод для получения общего числа голосов за этот вариант ответа.
+    # Использует обратную связь через ForeignKey: у Choice есть множество связанных Vote.
     def get_vote_count(self, obj):
         return obj.vote_set.count()
 
+    # Метод для расчёта процента голосов за этот вариант относительно общего числа голосов по вопросу.
+    # Важно: голоса считаются НЕ по Question (у него нет vote_set), а по всем Choice, относящимся к одному Question.
     def get_percentage(self, obj):
         # 🔥 ИСПРАВЛЕНО: считаем голоса по Question через Choice
+        # Фильтруем все голоса (Vote), где choice принадлежит тому же вопросу (question), что и текущий вариант (obj)
         total_votes = Vote.objects.filter(choice__question=obj.question).count()
         if total_votes == 0:
             return 0.0
         votes_for_this = obj.vote_set.count()
         return round(votes_for_this / total_votes * 100, 1)
 
+    # Метод для определения, голосовал ли ТЕКУЩИЙ ПОЛЬЗОВАТЕЛЬ за этот вариант.
+    # Возвращает список ID его голосов (обычно 0 или 1, так как голосовать можно один раз).
+    # Используется во фронтенде для выделения "Ваш выбор" и блокировки повторного голосования.
     def get_my_votes(self, obj):
+        # Получаем объект запроса из контекста (передача контекста настроена в PollList)
         request = self.context.get('request')
+        # Если запроса нет или пользователь не авторизован — возвращаем пустой список
         if not request or not request.user.is_authenticated:
             return []
+        # Ищем голоса текущего пользователя (request.user) по этому варианту (obj)
         return list(obj.vote_set.filter(user=request.user).values_list('id', flat=True))
 
 
+# Сериализатор для вопроса (Question).
+# Включает вложенные варианты ответов с полной статистикой через ChoiceWithStatsSerializer.
 class QuestionSerializer(serializers.ModelSerializer):
+    # Поле choices — это связанные объекты Choice.
+    # many=True — потому что один вопрос имеет много вариантов.
+    # read_only=True — потому что при создании вопроса варианты не передаются (они уже существуют).
     choices = ChoiceWithStatsSerializer(many=True, read_only=True)
 
     class Meta:
@@ -37,7 +60,12 @@ class QuestionSerializer(serializers.ModelSerializer):
         fields = ['id', 'text', 'choices']
 
 
+# Сериализатор для опроса (Poll).
+# Включает вложенные вопросы с вариантами и статистикой.
 class PollSerializer(serializers.ModelSerializer):
+    # Поле questions — связанные объекты Question.
+    # many=True — один опрос содержит много вопросов.
+    # read_only=True — вопросы не создаются при получении опроса.
     questions = QuestionSerializer(many=True, read_only=True)
 
     class Meta:
@@ -45,6 +73,9 @@ class PollSerializer(serializers.ModelSerializer):
         fields = ['id', 'title', 'date_created', 'questions']
 
 
+# Сериализатор для создания голоса (Vote).
+# Принимает только ID варианта ответа (choice).
+# Используется при POST-запросе на /api/vote/.
 class VoteSerializer(serializers.ModelSerializer):
     class Meta:
         model = Vote
